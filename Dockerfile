@@ -1,6 +1,7 @@
 FROM php:8.4-fpm-alpine
 
 RUN apk add --no-cache \
+    nginx \
     postgresql-dev \
     librdkafka-dev \
     linux-headers \
@@ -20,8 +21,11 @@ RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
 COPY . .
 
 RUN composer dump-autoload --optimize \
-    && chown -R www-data:www-data storage bootstrap/cache
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && chmod +x /var/www/html/docker/entrypoint-web.sh
+
+COPY docker/nginx/default.conf /etc/nginx/http.d/default.conf
 
 EXPOSE 8080
 
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8080"]
+CMD ["/var/www/html/docker/entrypoint-web.sh"]

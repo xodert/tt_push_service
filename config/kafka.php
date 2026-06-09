@@ -41,12 +41,7 @@ return [
      */
     'offset_reset' => env('KAFKA_OFFSET_RESET', 'latest'),
 
-    /*
-     | Auto-commit is intentionally disabled: librdkafka stores offsets at poll time
-     | and commits them in the background, which can acknowledge messages that were
-     | never processed (breaks at-least-once). Offsets are committed manually by the
-     | message handler after the processing job has been durably persisted.
-     */
+    // auto_commit=false: иначе librdkafka коммитит до обработки
     'auto_commit' => env('KAFKA_AUTO_COMMIT', false),
 
     'sleep_on_error' => env('KAFKA_ERROR_SLEEP', 5),
