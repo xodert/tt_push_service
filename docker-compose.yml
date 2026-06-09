@@ -1,0 +1,147 @@
+x-app-env: &app-env
+  APP_ENV: local
+  APP_KEY: base64:5V1RQAzCdGffiP46CAFPJUefVUWdsbs6qGIhvD/qrrE=
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: notifications
+  DB_USERNAME: notify
+  DB_PASSWORD: secret
+  REDIS_CLIENT: predis
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: database
+  KAFKA_BROKERS: kafka:9092
+  KAFKA_CONSUMER_GROUP_ID: notification-workers
+  KAFKA_OFFSET_RESET: earliest
+  KAFKA_AUTO_COMMIT: "false"
+  KAFKA_DLQ_TOPIC: notifications.dlq
+
+x-app-base: &app-base
+  build: .
+  environment: *app-env
+  networks:
+    - notify-net
+
+services:
+  app:
+    <<: *app-base
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  worker-high:
+    <<: *app-base
+    command: php artisan notifications:consume --topic=notifications_high
+    depends_on:
+      app:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+
+  worker-low:
+    <<: *app-base
+    command: php artisan notifications:consume --topic=notifications_low
+    depends_on:
+      app:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+
+  queue-worker:
+    <<: *app-base
+    command: php artisan queue:work --queue=high,low --tries=3 --backoff=60
+    depends_on:
+      app:
+        condition: service_started
+
+  scheduler:
+    <<: *app-base
+    command: php artisan schedule:work
+    depends_on:
+      app:
+        condition: service_started
+
+  migrate:
+    <<: *app-base
+    command: >
+      sh -c "php artisan migrate --force &&
+             php artisan db:seed --force"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: notifications
+      POSTGRES_USER: notify
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - notify-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notify -d notifications"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - notify-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - notify-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - notify-net
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null | grep -q '9092'"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+volumes:
+  pg_data:
+
+networks:
+  notify-net:
+    driver: bridge
